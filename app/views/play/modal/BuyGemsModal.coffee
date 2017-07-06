@@ -4,9 +4,10 @@ stripeHandler = require 'core/services/stripe'
 utils = require 'core/utils'
 SubscribeModal = require 'views/core/SubscribeModal'
 Products = require 'collections/Products'
+require('core/services/paypal')()
 
 module.exports = class BuyGemsModal extends ModalView
-  id: 
+  id:
     if (me.get('preferredLanguage',true) || 'en-US').split('-')[0] == 'nl'
       'buy-gems-modal-nl'
     else
@@ -23,6 +24,7 @@ module.exports = class BuyGemsModal extends ModalView
     'click .product button:not(.start-subscription-button)': 'onClickProductButton'
     'click #close-modal': 'hide'
     'click .start-subscription-button': 'onClickStartSubscription'
+    'click .payment-selector': 'onClickPaymentSelector'
 
   constructor: (options) ->
     super(options)
@@ -56,6 +58,49 @@ module.exports = class BuyGemsModal extends ModalView
     @playSound 'game-menu-open'
     if @basicProduct
       @$el.find('.subscription-gem-amount').text $.i18n.t('buy_gems.price').replace('{{gems}}', @basicProduct.get('gems'))
+    @$('[data-toggle="popover"]').each (i, el) ->
+      console.log el
+      $(el).popover({
+        placement: 'bottom'
+        html: true
+        content: "
+        <div>
+          <button class='payment-selector' data-product-id='#{$(el).data('product-id')}' data-processor='stripe'>Credit Card</button>
+          <div class='payment-selector' data-product-id='#{$(el).data('product-id')}' id='paypal-button-container'></div>
+        </div>
+        "
+      })
+      $(el).on 'shown.bs.popover', ->
+        paypal.Button.render({
+          env: if application.isProduction() then 'production' else 'sandbox', # sandbox | production
+
+          # PayPal Client IDs - replace with your own
+          # Create a PayPal app: https:#developer.paypal.com/developer/applications/create
+          client: {
+            sandbox:    'AZDxjDScFpQtjWTOUtWKbyN_bDt4OgqaF4eYXlewfBP4-8aqX3PiV8e1GWU6liB2CUXlkA59kJXE7M6R'
+            production: 'AcS4lYmr_NwK_TTWSJzOzTh01tVDceWDjB_N7df3vlvW4alTV_AF2rtmcaZDh0AmnTcOof9gKyLyHkm'
+          },
+          # Show the buyer a 'Pay Now' button in the checkout flow
+          commit: true,
+          # payment() is called when the button is clicked
+          payment: (data, actions) ->
+            # Make a call to the REST api to create the payment
+            return actions.payment.create {
+              payment:
+                transactions: [
+                  {
+                    amount: { total: '0.01', currency: 'USD' }
+                  }
+                ]
+            }
+          # onAuthorize() is called when the buyer approves the payment
+          onAuthorize: (data, actions) ->
+            # Make a call to the REST api to execute the payment
+            return actions.payment.execute().then(() ->
+              window.alert('Payment Complete!')
+            )
+
+        }, '#paypal-button-container');
 
   onHidden: ->
     super()
@@ -85,14 +130,35 @@ module.exports = class BuyGemsModal extends ModalView
 
     else
       application.tracker?.trackEvent 'Started gem purchase', { productID: productID }
-      stripeHandler.open({
-        description: $.t(product.get('i18n'))
-        amount: product.get('amount')
-        bitcoin: true
-        alipay: if me.get('country') is 'china' or (me.get('preferredLanguage') or 'en-US')[...2] is 'zh' then true else 'auto'
-      })
 
     @productBeingPurchased = product
+  
+  onClickPaymentSelector: (e) ->
+    $el = $(e.currentTarget)
+    productID = $el.data('product-id')
+    processor = $el.data('processor')
+    switch processor
+      when 'stripe'
+        @startStripePurchase(@products.findWhere { name: productID })
+      when 'paypal'
+        null # ignore
+        # startPayPalPurchase(@products.findWhere { name: productID })
+        
+  # startPayPalPurchase: (product) ->
+    # .open({
+    #   description: $.t(product.get('i18n'))
+    #   amount: product.get('amount')
+    #   bitcoin: true
+    #   alipay: if me.get('country') is 'china' or (me.get('preferredLanguage') or 'en-US')[...2] is 'zh' then true else 'auto'
+    # })
+
+  startStripePurchase: (product) ->
+    stripeHandler.open({
+      description: $.t(product.get('i18n'))
+      amount: product.get('amount')
+      bitcoin: true
+      alipay: if me.get('country') is 'china' or (me.get('preferredLanguage') or 'en-US')[...2] is 'zh' then true else 'auto'
+    })
 
   onStripeReceivedToken: (e) ->
     data = {
