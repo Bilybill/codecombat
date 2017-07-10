@@ -118,6 +118,7 @@ PaymentHandler = class PaymentHandler extends Handler
         return @sendBadInputError(res, 'Apple purchase? Need to specify which transaction.')
       @handleApplePaymentPost(req, res, appleReceipt, appleTransactionID, appleLocalPrice)
     else
+      console.log 1
       @handleStripePaymentPost(req, res, stripeTimestamp, productID, stripeToken)
 
   #- Apple payments
@@ -191,15 +192,31 @@ PaymentHandler = class PaymentHandler extends Handler
   #- Stripe payments
 
   handleStripePaymentPost: (req, res, timestamp, productID, token) ->
+    console.log 2
+    console.log res.headersSent
 
     # First, make sure we save the payment info as a Customer object, if we haven't already.
     if token
       customerID = req.user.get('stripe')?.customerID
+      console.log 2.1
+      console.log res.headersSent
 
       if customerID
         # old customer, new token. Save it.
-        stripe.customers.update customerID, { card: token }, (err, customer) =>
-          @beginStripePayment(req, res, timestamp, productID)
+        try
+          stripe.customers.update customerID, { card: token }, (err, customer) =>
+            console.log 3
+            console.log res.headersSent
+            console.log err
+            if err
+              console.log 3.1
+              console.log res.headersSent
+              @logPaymentError(req, 'Stripe customer update error. '+err)
+              return @sendDatabaseError(res, err)
+            console.log 3.2
+            @beginStripePayment(req, res, timestamp, productID)
+        catch e
+          console.log e
 
       else
         newCustomer = {
@@ -227,6 +244,8 @@ PaymentHandler = class PaymentHandler extends Handler
 
 
   beginStripePayment: (req, res, timestamp, productID) ->
+    console.trace()
+    console.log 4
 
     async.parallel([
       ((callback) ->
@@ -234,6 +253,7 @@ PaymentHandler = class PaymentHandler extends Handler
         Payment.findOne(criteria).exec((err, payment) =>
           callback(err, payment)
         )
+        console.log 5
       ),
       ((callback) ->
         stripe.charges.list({customer: req.user.get('stripe')?.customerID}, (err, recentCharges) =>

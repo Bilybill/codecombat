@@ -12,6 +12,7 @@ database = require '../commons/database'
 { getSponsoredSubsAmount } = require '../../app/core/utils'
 StripeUtils = require '../lib/stripe_utils'
 slack = require '../slack'
+paymentHandler = require '../handlers/payment_handler'
 
 subscribeWithPrepaidCode = expressWrap (req, res) ->
   { ppc } = req.body
@@ -205,6 +206,12 @@ unsubscribeUser = co.wrap (req, user, updateReqBody=true) ->
   req.body.stripe = stripeInfo if updateReqBody
   yield user.save()
 
+purchaseNonSubscriptionProduct = (req, res) ->
+  stripeToken = req.body.stripe?.token
+  stripeTimestamp = parseInt(req.body.stripe?.timestamp)
+  productID = req.body.productID
+  paymentHandler.handleStripePaymentPost(req, res, stripeTimestamp, productID, stripeToken)
+
 purchaseProduct = expressWrap (req, res) ->
   product = yield database.getDocFromHandle(req, Product)
   product ?= yield Product.findOne({name: req.params.handle})
@@ -214,7 +221,11 @@ purchaseProduct = expressWrap (req, res) ->
   if req.user.get('stripe.sponsorID')
     throw new errors.Forbidden('Sponsored subscribers may not purchase products.')
   unless productName in ['year_subscription', 'lifetime_subscription', 'lifetime_subscription2']
-    throw new errors.UnprocessableEntity('Unsupported product')
+    # defer to old logic
+    # don't yield so it can do its own error handling (TODO: handle error normally so we can yield)
+    return purchaseNonSubscriptionProduct(req, res)
+    
+  # If the user is subscribed, cancel their subscription first
   customer = yield StripeUtils.getCustomerAsync(req.user, req.body.stripe?.token or req.body.token)
   subscription = yield libUtils.findStripeSubscriptionAsync(customer.id, {subscriptionID: req.user.get('stripe')?.subscriptionID})
   stripeSubscriptionPeriodEndDate = new Date(subscription.current_period_end * 1000) if subscription
